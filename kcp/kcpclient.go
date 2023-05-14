@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"net"
 
 	"github.com/golang/snappy"
 	"github.com/net-byte/vtun/common/cache"
@@ -28,6 +29,36 @@ func StartClient(iface *water.Interface, config config.Config) {
 		return
 	}
 	go tunToKcp(config, iface)
+	
+	udpaddr, err := net.ResolveUDPAddr("udp", config.LocalAddr)
+	if err != nil {
+		netutil.PrintErr(err, config.Verbose)
+		return
+	}
+	if udpaddr.IP.To4() == nil { // ipv6
+		conn, err := net.ListenUDP("udp", udpaddr)
+		if err != nil {
+			netutil.PrintErr(err, config.Verbose)
+			return
+		}	
+
+		for {
+			session, err := kcp.NewConn(config.ServerAddr, block, 10, 3, conn)		
+			if err == nil {
+				log.Printf("StartClient session LocalAddr: %+v,  RemoteAddr: %+v", session.LocalAddr(), session.RemoteAddr())
+				go CheckKCPSessionAlive(session, config)
+				cache.GetCache().Set("kcpconn", session, 24*time.Hour)
+				kcpToTun(config, session, iface)
+				cache.GetCache().Delete("kcpconn")
+			} else {
+				netutil.PrintErr(err, config.Verbose)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+		}
+		return
+	}
+	
 	for {
 		if session, err := kcp.DialWithOptions(config.ServerAddr, block, 10, 3); err == nil {
 			go CheckKCPSessionAlive(session, config)

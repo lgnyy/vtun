@@ -16,7 +16,7 @@
 * 支持tls
 * 支持grpc
 * 支持quic
-* 支持kcp
+* 支持kcp， 支持ipv6防火墙打通
 
 # 用法
 

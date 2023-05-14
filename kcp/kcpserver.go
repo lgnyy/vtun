@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"log"
 	"time"
+	"net"	
 
 	"github.com/golang/snappy"
 	"github.com/net-byte/vtun/common/cache"
@@ -24,6 +25,38 @@ func StartServer(iface *water.Interface, config config.Config) {
 		netutil.PrintErr(err, config.Verbose)
 		return
 	}
+
+	udpaddr, err := net.ResolveUDPAddr("udp", config.LocalAddr)
+	if err != nil {
+		netutil.PrintErr(err, config.Verbose)
+		return
+	}
+	if udpaddr.IP.To4() == nil { // ipv6
+		conn, err := net.ListenUDP("udp", udpaddr)
+		if err != nil {
+			netutil.PrintErr(err, config.Verbose)
+			return
+		}
+
+		listener, err := kcp.ServeConn(block, 10, 3, conn)
+		if err == nil {			
+			log.Printf("StartServer, LocalAddr: %+v,  RemoteAddr: %+v", config.LocalAddr, config.ServerAddr)
+			go toHeartbeat(conn, config) // 定时心跳，为了打通防火墙
+			go toClient(iface, config)
+			for {
+				session, err := listener.AcceptKCP()
+				if err != nil {
+					netutil.PrintErr(err, config.Verbose)
+					continue
+				}
+				go toServer(iface, session, config)
+			}
+		} else {
+			log.Fatal(err)
+		}
+		return
+	}	
+
 	if listener, err := kcp.ListenWithOptions(config.LocalAddr, block, 10, 3); err == nil {
 		go toClient(iface, config)
 		for {
@@ -132,6 +165,23 @@ func toClient(iface *water.Interface, config config.Config) {
 				}
 				counter.IncrWrittenBytes(n)
 			}
+		}
+	}
+}
+
+
+func toHeartbeat(conn *net.UDPConn, config config.Config) {
+	serverAddr, err := net.ResolveUDPAddr("udp", config.ServerAddr)
+	if err != nil {
+		log.Fatalln("failed to resolve server addr:", err)
+	}
+	
+	b := make([]byte, 1)
+	for range time.NewTicker(5 * time.Second).C {
+		log.Printf("toHeartbeat: RemoteAddr: %+v", config.ServerAddr)
+		_, err := conn.WriteToUDP(b, serverAddr)
+		if err != nil {
+			netutil.PrintErr(err, config.Verbose)
 		}
 	}
 }
